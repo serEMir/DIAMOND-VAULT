@@ -1,0 +1,26 @@
+# OS / editor
+.DS_Store
+*.log
+.vscode/*
+!.vscode/extensions.json
+
+# Local planning / assistant artifacts
+prompt.md
+
+# Backup area for embedded git metadata moved during repo flattening
+.repo-backups/
+
+# Contracts workspace
+Diamond-Vault-Contracts/.env
+Diamond-Vault-Contracts/cache/
+Diamond-Vault-Contracts/out/
+Diamond-Vault-Contracts/broadcast/*/31337/
+Diamond-Vault-Contracts/broadcast/**/dry-run/
+
+# CRE workspace
+Diamond-Vault-CRE/.env
+Diamond-Vault-CRE/**/*.env
+Diamond-Vault-CRE/secrets.yaml
+Diamond-Vault-CRE/**/node_modules/
+Diamond-Vault-CRE/**/dist/
+
