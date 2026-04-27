@@ -16,6 +16,8 @@ DiamondVault is a multi-part workspace for an upgradeable diamond-based vault pr
 This repository is an active build in progress.
 
 - The contracts project contains the main protocol implementation and test suite.
+- The contracts workspace now includes a concrete Aave V3 strategy facet, local mocks, and both local and optional fork-based validation for strategy flows.
+- Storage-layout hardening material now lives alongside the contracts code, including a write-up and proof tests for safe vs broken diamond upgrades.
 - The CRE project is currently a scaffolded workflow area that will evolve alongside the protocol.
 
 ## Quick Start
@@ -26,6 +28,16 @@ This repository is an active build in progress.
 cd Diamond-Vault-Contracts
 forge build
 forge test
+```
+
+Focused validation for the new strategy and storage work:
+
+```bash
+cd Diamond-Vault-Contracts
+forge test --match-path test/AaveV3StrategyDiamond.t.sol -vv
+forge test --match-path test/StorageSafetyAudit.t.sol -vv
+forge test --match-path test/ShareAccountingHardening.t.sol -vv
+MAINNET_RPC_URL=<rpc-url> forge test --match-path 'test/fork test/AaveV3StrategyFork.t.sol' -vv
 ```
 
 ### CRE Workflow
@@ -45,6 +57,7 @@ cre workflow simulate Diamond-Vault-workflow --target staging-settings
 ## Documentation
 
 - Contracts overview and usage: `Diamond-Vault-Contracts/README.md`
+- Storage layout and upgrade safety: `Diamond-Vault-Contracts/docs/storage-layout.md`
 - Roles and incident response: `Diamond-Vault-Contracts/docs/roles-and-incident-response.md`
 - CRE workflow notes: `Diamond-Vault-CRE/README.md`
 
