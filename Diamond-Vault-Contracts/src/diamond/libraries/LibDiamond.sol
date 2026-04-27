@@ -77,6 +77,8 @@ library LibDiamond {
      */
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
+    event DiamondCut(IDiamondCut.FacetCut[] diamondCut, address init, bytes initCalldata);
+
     /*//////////////////////////////////////////////////////////////
                      INTERNAL FUNCTIONS
     //////////////////////////////////////////////////////////////*/
@@ -185,7 +187,7 @@ library LibDiamond {
             }
         }
 
-        emit IDiamondCut.DiamondCut(cut, init, initCalldata);
+        emit DiamondCut(cut, init, initCalldata);
         _initializeDiamondCut(init, initCalldata);
     }
 
