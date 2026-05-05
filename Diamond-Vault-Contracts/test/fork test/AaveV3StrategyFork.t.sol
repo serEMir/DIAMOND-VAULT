@@ -28,7 +28,6 @@ import {StrategyManagerFacet} from "../../src/strategy/facets/StrategyManagerFac
 import {AaveV3StrategyFacet} from "../../src/strategy/facets/AaveV3StrategyFacet.sol";
 
 contract AaveV3StrategyFork is Test {
-
     // ============================================================================
     // STATE VARIABLES
     // ============================================================================
@@ -293,7 +292,11 @@ contract AaveV3StrategyFork is Test {
 
         (,,,, uint256 debt,,,) = strategyManager.strategyState(AAVE_STRATEGY_ID);
         assertEq(debt, 60 * ONE_USDC, "Strategy debt should remain unchanged after failed free funds attempt");
-        assertEq(strategyManager.totalStrategyDebt(), 60 * ONE_USDC, "Total strategy debt should remain unchanged after failed free funds attempt");
+        assertEq(
+            strategyManager.totalStrategyDebt(),
+            60 * ONE_USDC,
+            "Total strategy debt should remain unchanged after failed free funds attempt"
+        );
     }
 
     // =============================================================================
