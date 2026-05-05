@@ -22,7 +22,7 @@ This Foundry workspace contains the onchain side of DiamondVault: the diamond pr
 - `AaveV3StrategyFacet` wires the vault's strategy manager into an Aave V3-style supply/withdraw/harvest flow.
 - `MockAavePool` and `MockAToken` provide deterministic local coverage for Aave debt accounting, yield harvesting, and liquidity pulls during withdrawals.
 - `StorageSafetyAudit.t.sol`, `ShareAccountingHardening.t.sol`, and the intentionally broken facet/storage fixtures document and prove the append-only storage rule for diamond upgrades.
-- `test/fork test/AaveV3StrategyFork.t.sol` adds an optional mainnet-fork smoke test for the Aave path when `MAINNET_RPC_URL` is set.
+- `test/fork test/AaveV3StrategyFork.t.sol` adds an optional mainnet-fork Aave validation suite covering allocation, withdrawal, harvest, and reserve-liquidity failure behavior when `MAINNET_RPC_URL` is set.
 
 ## Project Docs
 
@@ -53,13 +53,13 @@ forge test --match-path test/ShareAccountingHardening.t.sol -vv
 
 ### Optional Fork Test
 
-Set `MAINNET_RPC_URL` only when you want to run the live Aave smoke test:
+Set `MAINNET_RPC_URL` only when you want to run the live Aave fork suite:
 
 ```bash
 MAINNET_RPC_URL=<rpc-url> forge test --match-path 'test/fork test/AaveV3StrategyFork.t.sol' -vv
 ```
 
-Without that environment variable, the fork test exits early so the default local `forge test` flow still passes.
+Without that environment variable, the fork tests exit early so the default local `forge test` flow still passes.
 
 ### Format
 

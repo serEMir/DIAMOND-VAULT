@@ -70,7 +70,6 @@ contract ShareAccountingHardening is Test {
 
         //diamondInit = new DiamondInit();
 
-
         // Add facets to diamond
         IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](5);
 

@@ -22,17 +22,20 @@ import {IVaultPauseAdmin} from "../../src/vault/interfaces/IVaultPauseAdmin.sol"
 import {VaultInit} from "../../src/vault/upgrade/VaultInit.sol";
 
 import {IStrategyManager} from "../../src/strategy/interfaces/IStrategyManager.sol";
+import {IAavePool} from "../../src/strategy/interfaces/IAavePool.sol";
 import {IAaveV3StrategyFacet} from "../../src/strategy/interfaces/IAaveV3StrategyFacet.sol";
 import {StrategyManagerFacet} from "../../src/strategy/facets/StrategyManagerFacet.sol";
 import {AaveV3StrategyFacet} from "../../src/strategy/facets/AaveV3StrategyFacet.sol";
 
 contract AaveV3StrategyFork is Test {
+
+    // ============================================================================
+    // STATE VARIABLES
+    // ============================================================================
+
     address private constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
     address private constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address private constant A_USDC = 0x98C23E9d8f34FEFb1B7BD6a91B7FF122F4e16F5c;
-
-    uint256 private constant ONE_USDC = 1e6;
-    uint256 private constant ONE_SHARE = 1e18;
     bytes32 private constant AAVE_STRATEGY_ID = keccak256("aave-v3-usdc-strategy");
 
     address private owner = address(0xA11CE);
@@ -43,8 +46,16 @@ contract AaveV3StrategyFork is Test {
     Diamond private diamond;
     IERC20 private usdc;
     IERC20 private aToken;
+    IAavePool private pool;
 
-    function setUp() external {
+    uint256 private constant ONE_USDC = 1e6;
+    uint256 private constant ONE_SHARE = 1e18;
+
+    // ============================================================================
+    // SETUP
+    // ============================================================================
+
+    function setUp() public {
         string memory rpcUrl = vm.envOr("MAINNET_RPC_URL", string(""));
         if (bytes(rpcUrl).length == 0) {
             return;
@@ -55,22 +66,24 @@ contract AaveV3StrategyFork is Test {
 
         usdc = IERC20(USDC);
         aToken = IERC20(A_USDC);
+        pool = IAavePool(AAVE_POOL);
 
+        deal(USDC, alice, 100_000e6, true);
+
+        // Deploy Diamond and facets
         DiamondCutFacet cutFacet = new DiamondCutFacet();
         diamond = new Diamond(owner, address(cutFacet));
-
+        DiamondInit diamondInit = new DiamondInit();
         DiamondLoupeFacet loupeFacet = new DiamondLoupeFacet();
         OwnershipFacet ownershipFacet = new OwnershipFacet();
-        DiamondInit diamondInit = new DiamondInit();
-        VaultShareFacet shareFacet = new VaultShareFacet();
-        Vault4626Facet vaultFacet = new Vault4626Facet();
-        VaultPauseFacet pauseFacet = new VaultPauseFacet();
+        VaultShareFacet vaultShareFacet = new VaultShareFacet();
+        Vault4626Facet vault4626Facet = new Vault4626Facet();
+        VaultPauseFacet vaultPauseFacet = new VaultPauseFacet();
         StrategyManagerFacet strategyManagerFacet = new StrategyManagerFacet();
-        AaveV3StrategyFacet aaveStrategyFacet = new AaveV3StrategyFacet();
+        AaveV3StrategyFacet aaveV3StrategyFacet = new AaveV3StrategyFacet();
         VaultInit vaultInit = new VaultInit();
 
         vm.startPrank(owner);
-
         IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](7);
         cut[0] = IDiamondCut.FacetCut({
             facetAddress: address(loupeFacet),
@@ -83,17 +96,17 @@ contract AaveV3StrategyFork is Test {
             functionSelectors: _selectorsOwnership()
         });
         cut[2] = IDiamondCut.FacetCut({
-            facetAddress: address(shareFacet),
+            facetAddress: address(vaultShareFacet),
             action: IDiamondCut.FacetCutAction.Add,
             functionSelectors: _selectorsShare()
         });
         cut[3] = IDiamondCut.FacetCut({
-            facetAddress: address(vaultFacet),
+            facetAddress: address(vault4626Facet),
             action: IDiamondCut.FacetCutAction.Add,
             functionSelectors: _selectorsVault()
         });
         cut[4] = IDiamondCut.FacetCut({
-            facetAddress: address(pauseFacet),
+            facetAddress: address(vaultPauseFacet),
             action: IDiamondCut.FacetCutAction.Add,
             functionSelectors: _selectorsPause()
         });
@@ -103,7 +116,7 @@ contract AaveV3StrategyFork is Test {
             functionSelectors: _selectorsStrategyManager()
         });
         cut[6] = IDiamondCut.FacetCut({
-            facetAddress: address(aaveStrategyFacet),
+            facetAddress: address(aaveV3StrategyFacet),
             action: IDiamondCut.FacetCutAction.Add,
             functionSelectors: _selectorsAaveStrategy()
         });
@@ -114,10 +127,10 @@ contract AaveV3StrategyFork is Test {
             .diamondCut(
                 new IDiamondCut.FacetCut[](0),
                 address(vaultInit),
-                abi.encodeWithSelector(VaultInit.init.selector, USDC, "Diamond Vault Share", "DVS")
+                abi.encodeWithSelector(VaultInit.init.selector, address(usdc), "Diamond Vault Share", "DVS")
             );
 
-        IAaveV3StrategyFacet(address(diamond)).setAaveV3StrategyConfig(AAVE_STRATEGY_ID, AAVE_POOL, A_USDC);
+        IAaveV3StrategyFacet(address(diamond)).setAaveV3StrategyConfig(AAVE_STRATEGY_ID, address(pool), address(aToken));
         IStrategyManager(address(diamond))
             .registerStrategy(
                 AAVE_STRATEGY_ID,
@@ -125,54 +138,167 @@ contract AaveV3StrategyFork is Test {
                 IAaveV3StrategyFacet.aaveV3StrategyFreeFunds.selector,
                 IAaveV3StrategyFacet.aaveV3StrategyHarvest.selector
             );
+
         IStrategyManager(address(diamond)).setStrategyActive(AAVE_STRATEGY_ID, true);
 
         vm.stopPrank();
 
-        deal(USDC, alice, 1_000 * ONE_USDC, true);
         vm.prank(alice);
         usdc.approve(address(diamond), type(uint256).max);
     }
 
-    function test_forkAllocateAndWithdrawThroughAaveV3() external {
-        if (!forkEnabled) {
-            return;
-        }
+    // ============================================================================
+    // Helper Functions & Modifiers
+    // ============================================================================
+
+    function _assertApproxEqUsdc(uint256 left, uint256 right) internal pure {
+        assertApproxEqAbs(left, right, 2);
+    }
+
+    // ============================================================================
+    // Tests
+    // ============================================================================
+
+    function test_allocateToAaveSuppliesUnderlyingAndTracksDebt() public {
+        if (!forkEnabled) return;
 
         IERC4626 vault = IERC4626(address(diamond));
         IStrategyManager strategyManager = IStrategyManager(address(diamond));
-        IERC20 shares = IERC20(address(diamond));
 
         vm.prank(alice);
-        uint256 mintedShares = vault.deposit(100 * ONE_USDC, alice);
+        vault.deposit(100 * ONE_USDC, alice);
+
+        uint256 diamondUsdcBefore = usdc.balanceOf(address(diamond));
+        uint256 diamondATokenBefore = aToken.balanceOf(address(diamond));
 
         vm.prank(owner);
         uint256 deployedAssets = strategyManager.allocateToStrategy(AAVE_STRATEGY_ID, 60 * ONE_USDC);
 
+        uint256 diamondUsdcAfter = usdc.balanceOf(address(diamond));
+        uint256 diamondATokenAfter = aToken.balanceOf(address(diamond));
+
         (,,,, uint256 debt,,,) = strategyManager.strategyState(AAVE_STRATEGY_ID);
 
-        assertEq(mintedShares, 100 * ONE_SHARE);
-        assertEq(deployedAssets, 60 * ONE_USDC);
-        assertEq(debt, 60 * ONE_USDC);
-        assertEq(strategyManager.totalStrategyDebt(), 60 * ONE_USDC);
-        assertEq(vault.totalAssets(), 100 * ONE_USDC);
-        assertEq(usdc.balanceOf(address(diamond)), 40 * ONE_USDC);
-        assertGe(aToken.balanceOf(address(diamond)), 60 * ONE_USDC);
-        assertEq(vault.convertToAssets(shares.balanceOf(alice)), 100 * ONE_USDC);
+        assertEq(deployedAssets, 60 * ONE_USDC, "Deployed assets should be 60 USDC");
+        assertEq(debt, 60 * ONE_USDC, "Strategy debt should be 60 USDC");
+        assertEq(strategyManager.totalStrategyDebt(), 60 * ONE_USDC, "Total strategy debt should be 60 USDC");
 
-        uint256 aliceAssetsBefore = usdc.balanceOf(alice);
+        assertEq(diamondUsdcBefore, 100 * ONE_USDC, "Diamond should have 100 USDC before allocation");
+        assertEq(diamondUsdcAfter, 40 * ONE_USDC, "Diamond should have 40 USDC after allocating 60 USDC to strategy");
+
+        assertEq(diamondATokenBefore, 0, "Diamond should have 0 aUSDC before allocation");
+        _assertApproxEqUsdc(diamondATokenAfter, 60 * ONE_USDC);
+        // assertApproxEqAbs(diamondATokenAfter, 60 * ONE_USDC, ONE_USDC, "Diamond should have approx. 60 aUSDC after allocation to strategy");
+
+        assertEq(vault.totalAssets(), 100 * ONE_USDC, "Vault total assets should still be 100 USDC");
+    }
+
+    function test_withdrawPullsFromAaveWhenIdleCashIsNotEnough() public {
+        if (!forkEnabled) return;
+
+        IERC4626 vault = IERC4626(address(diamond));
+        IStrategyManager strategyManager = IStrategyManager(address(diamond));
+
+        vm.prank(alice);
+        vault.deposit(100 * ONE_USDC, alice);
+
+        vm.prank(owner);
+        strategyManager.allocateToStrategy(AAVE_STRATEGY_ID, 60 * ONE_USDC);
+
+        uint256 aliceUsdcBefore = usdc.balanceOf(alice);
+        uint256 diamondUsdcBefore = usdc.balanceOf(address(diamond));
+        uint256 diamondATokenBefore = aToken.balanceOf(address(diamond));
 
         vm.prank(alice);
         uint256 burnedShares = vault.withdraw(50 * ONE_USDC, alice, alice);
 
-        (,,,, uint256 debtAfterWithdraw,,,) = strategyManager.strategyState(AAVE_STRATEGY_ID);
+        uint256 aliceUsdcAfter = usdc.balanceOf(alice);
+        uint256 diamondUsdcAfter = usdc.balanceOf(address(diamond));
+        uint256 diamondATokenAfter = aToken.balanceOf(address(diamond));
+
+        (,,,, uint256 debt,,,) = strategyManager.strategyState(AAVE_STRATEGY_ID);
 
         assertEq(burnedShares, 50 * ONE_SHARE);
-        assertEq(usdc.balanceOf(alice), aliceAssetsBefore + 50 * ONE_USDC);
-        assertEq(strategyManager.totalStrategyDebt(), debtAfterWithdraw);
-        assertLe(debtAfterWithdraw, 60 * ONE_USDC);
-        assertEq(vault.totalAssets(), 50 * ONE_USDC);
+        assertEq(
+            strategyManager.totalStrategyDebt(),
+            50 * ONE_USDC,
+            "Total strategy debt should be reduced to 50 USDC after withdrawal"
+        );
+        assertEq(debt, 50 * ONE_USDC, "Strategy debt should be reduced to 50 USDC after withdrawal");
+
+        assertEq(aliceUsdcAfter, aliceUsdcBefore + 50 * ONE_USDC, "Alice should have 50 USDC more after withdrawal");
+        assertEq(diamondUsdcBefore, 40 * ONE_USDC, "Diamond should have 40 USDC before withdrawal");
+        assertEq(diamondUsdcAfter, 0, "Diamond should have 0 USDC after withdrawal");
+
+        _assertApproxEqUsdc(diamondATokenBefore, 60 * ONE_USDC);
+        _assertApproxEqUsdc(diamondATokenAfter, 50 * ONE_USDC);
+
+        assertEq(vault.totalAssets(), 50 * ONE_USDC, "Vault total assets should be reduced to 50 USDC after withdrawal");
     }
+
+    function test_harvestOnAaveSyncsDebtToLiveATokenBalance() external {
+        if (!forkEnabled) return;
+
+        IERC4626 vault = IERC4626(address(diamond));
+        IStrategyManager strategyManager = IStrategyManager(address(diamond));
+
+        vm.prank(alice);
+        vault.deposit(100 * ONE_USDC, alice);
+
+        vm.prank(owner);
+        strategyManager.allocateToStrategy(AAVE_STRATEGY_ID, 60 * ONE_USDC);
+
+        uint256 liveATokenBalanceBefore = aToken.balanceOf(address(diamond));
+
+        vm.prank(owner);
+        (uint256 reportedAssets, uint256 gain,) = strategyManager.harvestStrategy(AAVE_STRATEGY_ID);
+
+        (,,,, uint256 debt,,,) = strategyManager.strategyState(AAVE_STRATEGY_ID);
+
+        assertEq(debt, reportedAssets);
+        assertEq(strategyManager.totalStrategyDebt(), reportedAssets);
+
+        assertEq(reportedAssets, aToken.balanceOf(address(diamond)));
+        _assertApproxEqUsdc(reportedAssets, 60 * ONE_USDC);
+        _assertApproxEqUsdc(liveATokenBalanceBefore, 60 * ONE_USDC);
+
+        if (reportedAssets > 60 * ONE_USDC) {
+            assertEq(gain, reportedAssets - 60 * ONE_USDC, "Gain should be the excess over the initial 60 USDC");
+        } else {
+            assertEq(gain, 0);
+        }
+
+        assertEq(vault.totalAssets(), usdc.balanceOf(address(diamond)) + debt);
+    }
+
+    function test_freeFundsFromAaveRevertsWhenReserveLiquidityIsInsufficent() external {
+        if (!forkEnabled) return;
+
+        IERC4626 vault = IERC4626(address(diamond));
+        IStrategyManager strategyManager = IStrategyManager(address(diamond));
+
+        vm.prank(alice);
+        vault.deposit(100 * ONE_USDC, alice);
+
+        vm.prank(owner);
+        strategyManager.allocateToStrategy(AAVE_STRATEGY_ID, 60 * ONE_USDC);
+
+        // Force the reserve backing aUSDC to have less underlying than the strategy wants to pull.
+        // This is a deliberate fork-state mutation to test the failure path.
+        deal(USDC, A_USDC, 5 * ONE_USDC, true);
+
+        vm.prank(owner);
+        vm.expectRevert();
+        strategyManager.freeFundsFromStrategy(AAVE_STRATEGY_ID, 20 * ONE_USDC);
+
+        (,,,, uint256 debt,,,) = strategyManager.strategyState(AAVE_STRATEGY_ID);
+        assertEq(debt, 60 * ONE_USDC, "Strategy debt should remain unchanged after failed free funds attempt");
+        assertEq(strategyManager.totalStrategyDebt(), 60 * ONE_USDC, "Total strategy debt should remain unchanged after failed free funds attempt");
+    }
+
+    // =============================================================================
+    // Facet Selectors
+    // =============================================================================
 
     function _selectorsLoupe() private pure returns (bytes4[] memory selectors) {
         selectors = new bytes4[](5);

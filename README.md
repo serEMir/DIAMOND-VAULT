@@ -16,7 +16,7 @@ DiamondVault is a multi-part workspace for an upgradeable diamond-based vault pr
 This repository is an active build in progress.
 
 - The contracts project contains the main protocol implementation and test suite.
-- The contracts workspace now includes a concrete Aave V3 strategy facet, local mocks, and both local and optional fork-based validation for strategy flows.
+- The contracts workspace now includes a concrete Aave V3 strategy facet, local mocks, and both local and optional mainnet-fork validation for strategy allocation, withdrawal, harvest, and liquidity-stress flows.
 - Storage-layout hardening material now lives alongside the contracts code, including a write-up and proof tests for safe vs broken diamond upgrades.
 - The CRE project is currently a scaffolded workflow area that will evolve alongside the protocol.
 
