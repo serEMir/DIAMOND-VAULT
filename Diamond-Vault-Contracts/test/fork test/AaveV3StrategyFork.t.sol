@@ -40,8 +40,6 @@ contract AaveV3StrategyFork is Test {
     address private owner = address(0xA11CE);
     address private alice = address(0xA11CEA);
 
-    bool private forkEnabled;
-
     Diamond private diamond;
     IERC20 private usdc;
     IERC20 private aToken;
@@ -55,12 +53,7 @@ contract AaveV3StrategyFork is Test {
     // ============================================================================
 
     function setUp() public {
-        string memory rpcUrl = vm.envOr("MAINNET_RPC_URL", string(""));
-        if (bytes(rpcUrl).length == 0) {
-            return;
-        }
-
-        forkEnabled = true;
+        string memory rpcUrl = vm.envString("MAINNET_RPC_URL");
         vm.createSelectFork(rpcUrl);
 
         usdc = IERC20(USDC);
@@ -129,7 +122,6 @@ contract AaveV3StrategyFork is Test {
                 abi.encodeWithSelector(VaultInit.init.selector, address(usdc), "Diamond Vault Share", "DVS")
             );
 
-        IAaveV3StrategyFacet(address(diamond)).setAaveV3StrategyConfig(AAVE_STRATEGY_ID, address(pool), address(aToken));
         IStrategyManager(address(diamond))
             .registerStrategy(
                 AAVE_STRATEGY_ID,
@@ -137,6 +129,8 @@ contract AaveV3StrategyFork is Test {
                 IAaveV3StrategyFacet.aaveV3StrategyFreeFunds.selector,
                 IAaveV3StrategyFacet.aaveV3StrategyHarvest.selector
             );
+
+        IAaveV3StrategyFacet(address(diamond)).setAaveV3StrategyConfig(AAVE_STRATEGY_ID, address(pool), address(aToken));
 
         IStrategyManager(address(diamond)).setStrategyActive(AAVE_STRATEGY_ID, true);
 
@@ -159,8 +153,6 @@ contract AaveV3StrategyFork is Test {
     // ============================================================================
 
     function test_allocateToAaveSuppliesUnderlyingAndTracksDebt() public {
-        if (!forkEnabled) return;
-
         IERC4626 vault = IERC4626(address(diamond));
         IStrategyManager strategyManager = IStrategyManager(address(diamond));
 
@@ -193,8 +185,6 @@ contract AaveV3StrategyFork is Test {
     }
 
     function test_withdrawPullsFromAaveWhenIdleCashIsNotEnough() public {
-        if (!forkEnabled) return;
-
         IERC4626 vault = IERC4626(address(diamond));
         IStrategyManager strategyManager = IStrategyManager(address(diamond));
 
@@ -236,8 +226,6 @@ contract AaveV3StrategyFork is Test {
     }
 
     function test_harvestOnAaveSyncsDebtToLiveATokenBalance() external {
-        if (!forkEnabled) return;
-
         IERC4626 vault = IERC4626(address(diamond));
         IStrategyManager strategyManager = IStrategyManager(address(diamond));
 
@@ -271,8 +259,6 @@ contract AaveV3StrategyFork is Test {
     }
 
     function test_freeFundsFromAaveRevertsWhenReserveLiquidityIsInsufficent() external {
-        if (!forkEnabled) return;
-
         IERC4626 vault = IERC4626(address(diamond));
         IStrategyManager strategyManager = IStrategyManager(address(diamond));
 

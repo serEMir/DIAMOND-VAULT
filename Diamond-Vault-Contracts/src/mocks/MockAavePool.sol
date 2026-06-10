@@ -18,7 +18,7 @@ contract MockAavePool {
 
     constructor(address asset_) {
         asset = IERC20(asset_);
-        aToken = new MockAToken("Mock Aave USDC", "maUSDC", 6, address(this));
+        aToken = new MockAToken("Mock Aave USDC", "maUSDC", 6, address(this), asset_);
     }
 
     function supply(address asset_, uint256 amount, address onBehalfOf, uint16) external {

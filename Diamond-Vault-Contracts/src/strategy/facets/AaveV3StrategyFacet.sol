@@ -8,6 +8,8 @@ import {IAavePool} from "../interfaces/IAavePool.sol";
 import {IAaveV3StrategyFacet} from "../interfaces/IAaveV3StrategyFacet.sol";
 import {LibAaveV3StrategyStorage} from "../libraries/LibAaveV3StrategyStorage.sol";
 import {LibVaultStorage} from "../../vault/libraries/LibVaultStorage.sol";
+import {IAaveAToken} from "../interfaces/IAaveAToken.sol";
+import {LibStrategyStorage} from "../libraries/LibStrategyStorage.sol";
 
 /**
  * @title AaveV3StrategyFacet
@@ -16,7 +18,16 @@ import {LibVaultStorage} from "../../vault/libraries/LibVaultStorage.sol";
 contract AaveV3StrategyFacet is IAaveV3StrategyFacet {
     using SafeERC20 for IERC20;
 
+    // =======================================================================
+    // Errors
+    // =======================================================================
     error AaveV3StrategyFacet__OnlyDiamond();
+    error AaveV3StrategyFacet__StrategyConfigLocked(bytes32 strategyId, uint256 debt, uint256 aTokenBalance);
+    error AaveV3StrategyFacet__PoolHasNoCode(address pool);
+    error AaveV3StrategyFacet__ATokenHasNoCode(address aToken);
+    error AaveV3StrategyFacet__ATokenUnderlyingMismatch(bytes32 strategyId, address expected, address actual);
+    error AaveV3StrategyFacet__ATokenPoolMismatch(bytes32 strategyId, address expected, address actual);
+    error AaveV3StrategyFacet__StrategyNotRegistered(bytes32 strategyId);
 
     /**
      * @notice Sets the pool and aToken addresses for a strategy id.
@@ -26,6 +37,8 @@ contract AaveV3StrategyFacet is IAaveV3StrategyFacet {
      */
     function setAaveV3StrategyConfig(bytes32 strategyId, address pool, address aToken) external {
         LibDiamond.enforceIsContractOwner();
+        _validateConfigChange(strategyId, pool, aToken);
+
         (address previousPool, address previousAToken) = LibAaveV3StrategyStorage.setConfig(strategyId, pool, aToken);
         emit AaveV3StrategyConfigured(strategyId, previousPool, pool, previousAToken, aToken);
     }
@@ -73,8 +86,10 @@ contract AaveV3StrategyFacet is IAaveV3StrategyFacet {
         _enforceOnlyDiamond();
 
         LibAaveV3StrategyStorage.AaveV3StrategyConfig memory config = LibAaveV3StrategyStorage.configOf(strategyId);
+
         freedAssets = IAavePool(config.pool).withdraw(LibVaultStorage.vaultStorage().asset, assets, address(this));
-        loss = assets - freedAssets;
+
+        loss = 0;
     }
 
     /**
@@ -91,5 +106,36 @@ contract AaveV3StrategyFacet is IAaveV3StrategyFacet {
 
     function _enforceOnlyDiamond() private view {
         if (msg.sender != address(this)) revert AaveV3StrategyFacet__OnlyDiamond();
+    }
+
+    function _validateConfigChange(bytes32 strategyId, address pool, address aToken) private view {
+        if (pool.code.length == 0) revert AaveV3StrategyFacet__PoolHasNoCode(pool);
+        if (aToken.code.length == 0) revert AaveV3StrategyFacet__ATokenHasNoCode(aToken);
+
+        LibStrategyStorage.StrategyStorage storage ss = LibStrategyStorage.strategyStorage();
+        LibStrategyStorage.StrategyConfig storage strategy = ss.strategies[strategyId];
+        if (!strategy.exists) revert AaveV3StrategyFacet__StrategyNotRegistered(strategyId);
+
+        LibAaveV3StrategyStorage.AaveV3StrategyStorage storage avs = LibAaveV3StrategyStorage.aaveV3StrategyStorage();
+        LibAaveV3StrategyStorage.AaveV3StrategyConfig storage currentConfig = avs.strategies[strategyId];
+
+        uint256 currentATokenBalance =
+            currentConfig.aToken == address(0) ? 0 : IERC20(currentConfig.aToken).balanceOf(address(this));
+
+        if ((strategy.debt != 0) || currentATokenBalance != 0) {
+            revert AaveV3StrategyFacet__StrategyConfigLocked(strategyId, strategy.debt, currentATokenBalance);
+        }
+
+        address expectedAsset = LibVaultStorage.vaultStorage().asset;
+        address actualUnderlying = IAaveAToken(aToken).UNDERLYING_ASSET_ADDRESS();
+
+        if (actualUnderlying != expectedAsset) {
+            revert AaveV3StrategyFacet__ATokenUnderlyingMismatch(strategyId, expectedAsset, actualUnderlying);
+        }
+
+        address actualPool = IAaveAToken(aToken).POOL();
+        if (actualPool != pool) {
+            revert AaveV3StrategyFacet__ATokenPoolMismatch(strategyId, pool, actualPool);
+        }
     }
 }

@@ -59,7 +59,8 @@ Set `MAINNET_RPC_URL` only when you want to run the live Aave fork suite:
 MAINNET_RPC_URL=<rpc-url> forge test --match-path 'test/fork test/AaveV3StrategyFork.t.sol' -vv
 ```
 
-Without that environment variable, the fork tests exit early so the default local `forge test` flow still passes.
+Without that environment variable, the fork test setup fails intentionally. Use
+`forge test --no-match-path 'test/fork test/*'` when you want to run only the local suite.
 
 ### Format
 
@@ -77,6 +78,43 @@ forge snapshot
 
 ```bash
 anvil
+```
+
+### Deploy
+
+Fresh deployment:
+
+```bash
+source .env
+
+VAULT_ASSET=<asset-token-address> \
+KEEPER=<cre-or-keeper-address> \
+forge script script/DeployDiamondVault.s.sol:DeployDiamondVault --rpc-url "$SEPOLIA_RPC_URL" --account "$ACCOUNT" --broadcast -vv
+```
+
+If `VAULT_ASSET` is omitted, the script deploys a `MockUSDC`, which is useful for local Anvil deployments but not for a real testnet vault.
+
+Optional Aave registration during deployment:
+
+```bash
+source .env
+
+VAULT_ASSET=<underlying-token-address> \
+REGISTER_AAVE_STRATEGY=true \
+AAVE_POOL=<aave-pool-address> \
+AAVE_ATOKEN=<a-token-address> \
+KEEPER=<cre-or-keeper-address> \
+forge script script/DeployDiamondVault.s.sol:DeployDiamondVault --rpc-url "$SEPOLIA_RPC_URL" --account "$ACCOUNT" --broadcast -vv
+```
+
+Upgrade an existing diamond with only the keeper facet:
+
+```bash
+source .env
+
+DIAMOND=<diamond-address> \
+KEEPER=<cre-or-keeper-address> \
+forge script script/AddStrategyKeeperFacet.s.sol:AddStrategyKeeperFacet --rpc-url "$SEPOLIA_RPC_URL" --account "$ACCOUNT" --broadcast -vv
 ```
 
 ### Help

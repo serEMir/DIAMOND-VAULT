@@ -24,9 +24,12 @@ import {LibReentrancyGuard} from "../src/vault/libraries/LibReentrancyGuard.sol"
 import {LibVaultStorage} from "../src/vault/libraries/LibVaultStorage.sol";
 import {VaultInit} from "../src/vault/upgrade/VaultInit.sol";
 import {IStrategyManager} from "../src/strategy/interfaces/IStrategyManager.sol";
+import {IStrategyKeeper} from "../src/strategy/interfaces/IStrategyKeeper.sol";
 import {IMockStrategyFacet} from "../src/strategy/interfaces/IMockStrategyFacet.sol";
 import {StrategyManagerFacet} from "../src/strategy/facets/StrategyManagerFacet.sol";
+import {StrategyKeeperFacet} from "../src/strategy/facets/StrategyKeeperFacet.sol";
 import {MockStrategyFacet} from "../src/strategy/facets/MockStrategyFacet.sol";
+import {LibStrategyKeeperStorage} from "../src/strategy/libraries/LibStrategyKeeperStorage.sol";
 import {LibStrategyStorage} from "../src/strategy/libraries/LibStrategyStorage.sol";
 
 contract StrategyManagerDiamondTest is Test {
@@ -57,12 +60,13 @@ contract StrategyManagerDiamondTest is Test {
         Vault4626Facet vaultFacet = new Vault4626Facet();
         VaultPauseFacet pauseFacet = new VaultPauseFacet();
         StrategyManagerFacet strategyManagerFacet = new StrategyManagerFacet();
+        StrategyKeeperFacet strategyKeeperFacet = new StrategyKeeperFacet();
         MockStrategyFacet mockStrategyFacet = new MockStrategyFacet();
         VaultInit vaultInit = new VaultInit();
 
         vm.startPrank(owner);
 
-        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](7);
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](8);
         cut[0] = IDiamondCut.FacetCut({
             facetAddress: address(loupeFacet),
             action: IDiamondCut.FacetCutAction.Add,
@@ -97,6 +101,11 @@ contract StrategyManagerDiamondTest is Test {
             facetAddress: address(mockStrategyFacet),
             action: IDiamondCut.FacetCutAction.Add,
             functionSelectors: _selectorsMockStrategy()
+        });
+        cut[7] = IDiamondCut.FacetCut({
+            facetAddress: address(strategyKeeperFacet),
+            action: IDiamondCut.FacetCutAction.Add,
+            functionSelectors: _selectorsStrategyKeeper()
         });
 
         IDiamondCut(address(diamond))
@@ -170,6 +179,159 @@ contract StrategyManagerDiamondTest is Test {
         assertEq(strategyManager.totalStrategyDebt(), 70 * ONE_USDC);
         assertEq(vault.totalAssets(), 110 * ONE_USDC);
         assertEq(vault.convertToAssets(shareToken.balanceOf(alice)), 110 * ONE_USDC);
+    }
+
+    function test_ownerCanSetStrategyKeeper() external {
+        IStrategyKeeper strategyKeeper = IStrategyKeeper(address(diamond));
+
+        vm.prank(owner);
+        strategyKeeper.setKeeper(charlie);
+
+        assertEq(strategyKeeper.keeper(), charlie);
+    }
+
+    function test_nonOwnerCannotSetStrategyKeeper() external {
+        IStrategyKeeper strategyKeeper = IStrategyKeeper(address(diamond));
+
+        vm.prank(alice);
+        vm.expectRevert();
+        strategyKeeper.setKeeper(charlie);
+    }
+
+    function test_keeperCanHarvestStrategy() external {
+        IERC4626 vault = IERC4626(address(diamond));
+        IStrategyManager strategyManager = IStrategyManager(address(diamond));
+        IStrategyKeeper strategyKeeper = IStrategyKeeper(address(diamond));
+
+        vm.prank(owner);
+        strategyKeeper.setKeeper(charlie);
+
+        vm.prank(alice);
+        vault.deposit(100 * ONE_USDC, alice);
+
+        vm.prank(owner);
+        strategyManager.allocateToStrategy(MOCK_STRATEGY_ID, 60 * ONE_USDC);
+
+        usdc.mint(address(source), 10 * ONE_USDC);
+        source.setReportedAssets(address(diamond), 70 * ONE_USDC);
+
+        vm.prank(charlie);
+        (uint256 reportedAssets, uint256 gain, uint256 loss) = strategyKeeper.keeperHarvestStrategy(MOCK_STRATEGY_ID);
+
+        assertEq(reportedAssets, 70 * ONE_USDC);
+        assertEq(gain, 10 * ONE_USDC);
+        assertEq(loss, 0);
+        assertEq(strategyManager.totalStrategyDebt(), 70 * ONE_USDC);
+        assertEq(vault.totalAssets(), 110 * ONE_USDC);
+    }
+
+    function test_nonKeeperCannotKeeperHarvest() external {
+        IStrategyKeeper strategyKeeper = IStrategyKeeper(address(diamond));
+
+        vm.prank(owner);
+        strategyKeeper.setKeeper(charlie);
+
+        vm.prank(bob);
+        vm.expectRevert(
+            abi.encodeWithSelector(LibStrategyKeeperStorage.LibStrategyKeeperStorage__NotKeeper.selector, bob, charlie)
+        );
+        strategyKeeper.keeperHarvestStrategy(MOCK_STRATEGY_ID);
+    }
+
+    function test_keeperCannotAllocateOrFreeFunds() external {
+        IERC4626 vault = IERC4626(address(diamond));
+        IStrategyManager strategyManager = IStrategyManager(address(diamond));
+        IStrategyKeeper strategyKeeper = IStrategyKeeper(address(diamond));
+
+        vm.prank(owner);
+        strategyKeeper.setKeeper(charlie);
+
+        vm.prank(alice);
+        vault.deposit(100 * ONE_USDC, alice);
+
+        vm.prank(charlie);
+        vm.expectRevert();
+        strategyManager.allocateToStrategy(MOCK_STRATEGY_ID, 10 * ONE_USDC);
+
+        vm.prank(owner);
+        strategyManager.allocateToStrategy(MOCK_STRATEGY_ID, 60 * ONE_USDC);
+
+        vm.prank(charlie);
+        vm.expectRevert();
+        strategyManager.freeFundsFromStrategy(MOCK_STRATEGY_ID, 10 * ONE_USDC);
+    }
+
+    function test_keeperCannotPauseOrFreezeStrategy() external {
+        IStrategyManager strategyManager = IStrategyManager(address(diamond));
+        IStrategyKeeper strategyKeeper = IStrategyKeeper(address(diamond));
+
+        vm.prank(owner);
+        strategyKeeper.setKeeper(charlie);
+
+        vm.prank(charlie);
+        vm.expectRevert();
+        strategyManager.setStrategyAllocationsPaused(MOCK_STRATEGY_ID, true);
+
+        vm.prank(charlie);
+        vm.expectRevert();
+        strategyManager.setStrategyFrozen(MOCK_STRATEGY_ID, true);
+    }
+
+    function test_keeperCannotRegisterOrActivateStrategies() external {
+        IStrategyManager strategyManager = IStrategyManager(address(diamond));
+        IStrategyKeeper strategyKeeper = IStrategyKeeper(address(diamond));
+
+        vm.prank(owner);
+        strategyKeeper.setKeeper(charlie);
+
+        vm.prank(charlie);
+        vm.expectRevert();
+        strategyManager.registerStrategy(
+            keccak256("keeper-created-strategy"),
+            IMockStrategyFacet.mockStrategyDeploy.selector,
+            IMockStrategyFacet.mockStrategyFreeFunds.selector,
+            IMockStrategyFacet.mockStrategyHarvest.selector
+        );
+
+        vm.prank(charlie);
+        vm.expectRevert();
+        strategyManager.setStrategyActive(MOCK_STRATEGY_ID, false);
+    }
+
+    function test_keeperCannotUpgradeDiamond() external {
+        IStrategyKeeper strategyKeeper = IStrategyKeeper(address(diamond));
+        IDiamondCut.FacetCut[] memory emptyCut = new IDiamondCut.FacetCut[](0);
+
+        vm.prank(owner);
+        strategyKeeper.setKeeper(charlie);
+
+        vm.prank(charlie);
+        vm.expectRevert();
+        IDiamondCut(address(diamond)).diamondCut(emptyCut, address(0), "");
+    }
+
+    function test_frozenStrategyBlocksKeeperHarvest() external {
+        IERC4626 vault = IERC4626(address(diamond));
+        IStrategyManager strategyManager = IStrategyManager(address(diamond));
+        IStrategyKeeper strategyKeeper = IStrategyKeeper(address(diamond));
+
+        vm.prank(owner);
+        strategyKeeper.setKeeper(charlie);
+
+        vm.prank(alice);
+        vault.deposit(100 * ONE_USDC, alice);
+
+        vm.prank(owner);
+        strategyManager.allocateToStrategy(MOCK_STRATEGY_ID, 60 * ONE_USDC);
+
+        vm.prank(owner);
+        strategyManager.setStrategyFrozen(MOCK_STRATEGY_ID, true);
+
+        vm.prank(charlie);
+        vm.expectRevert(
+            abi.encodeWithSelector(LibStrategyStorage.LibStrategyStorage__StrategyFrozen.selector, MOCK_STRATEGY_ID)
+        );
+        strategyKeeper.keeperHarvestStrategy(MOCK_STRATEGY_ID);
     }
 
     function test_harvestedLossLowersTotalAssets() external {
@@ -529,6 +691,13 @@ contract StrategyManagerDiamondTest is Test {
         selectors[7] = IStrategyManager.allocateToStrategy.selector;
         selectors[8] = IStrategyManager.freeFundsFromStrategy.selector;
         selectors[9] = IStrategyManager.harvestStrategy.selector;
+    }
+
+    function _selectorsStrategyKeeper() private pure returns (bytes4[] memory selectors) {
+        selectors = new bytes4[](3);
+        selectors[0] = IStrategyKeeper.keeper.selector;
+        selectors[1] = IStrategyKeeper.setKeeper.selector;
+        selectors[2] = IStrategyKeeper.keeperHarvestStrategy.selector;
     }
 
     function _selectorsMockStrategy() private pure returns (bytes4[] memory selectors) {

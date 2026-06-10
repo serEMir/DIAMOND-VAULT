@@ -96,6 +96,9 @@ contract Vault4626DiamondTest is Test {
         usdc.approve(address(diamond), type(uint256).max);
     }
 
+    // =============================================================================
+    // TESTS
+    // =============================================================================
     function test_initialDepositUsesOneToOneWholeTokenPricing() external {
         IERC4626 vault = IERC4626(address(diamond));
         IERC20Metadata shareToken = IERC20Metadata(address(diamond));
@@ -337,6 +340,54 @@ contract Vault4626DiamondTest is Test {
         vm.expectRevert();
         pauseAdmin.setWithdrawalsPaused(true);
     }
+
+    function test_delegatedWithdrawUsesSharesAllowance() external {
+        IERC4626 vault = IERC4626(address(diamond));
+        IERC20 shareToken = IERC20(address(diamond));
+
+        vm.prank(alice);
+        vault.deposit(100 * ONE_USDC, alice);
+
+        vm.prank(alice);
+        shareToken.approve(bob, 50 * ONE_SHARE);
+
+        uint256 bobAssetsBefore = usdc.balanceOf(bob);
+
+        vm.prank(bob);
+        uint256 burnedShares = vault.withdraw(20 * ONE_USDC, bob, alice);
+
+        assertEq(burnedShares, 20 * ONE_SHARE);
+        assertEq(usdc.balanceOf(bob), bobAssetsBefore + 20 * ONE_USDC);
+        assertEq(shareToken.balanceOf(alice), 80 * ONE_SHARE);
+        assertEq(shareToken.allowance(alice, bob), 30 * ONE_SHARE);
+        assertEq(vault.totalAssets(), 80 * ONE_USDC);
+    }
+
+    function test_delegatedRedeemUsesSharesAllowance() external {
+        IERC4626 vault = IERC4626(address(diamond));
+        IERC20 shareToken = IERC20(address(diamond));
+
+        vm.prank(alice);
+        vault.deposit(100 * ONE_USDC, alice);
+
+        vm.prank(alice);
+        shareToken.approve(bob, 50 * ONE_SHARE);
+
+        uint256 bobAssetsBefore = usdc.balanceOf(bob);
+
+        vm.prank(bob);
+        uint256 redeemedAssets = vault.redeem(20 * ONE_SHARE, bob, alice);
+
+        assertEq(redeemedAssets, 20 * ONE_USDC);
+        assertEq(usdc.balanceOf(bob), bobAssetsBefore + 20 * ONE_USDC);
+        assertEq(shareToken.balanceOf(alice), 80 * ONE_SHARE);
+        assertEq(shareToken.allowance(alice, bob), 30 * ONE_SHARE);
+        assertEq(vault.totalAssets(), 80 * ONE_USDC);
+    }
+
+    // =============================================================================
+    // Facet Selectors
+    // =============================================================================
 
     function _selectorsLoupe() private pure returns (bytes4[] memory selectors) {
         selectors = new bytes4[](5);

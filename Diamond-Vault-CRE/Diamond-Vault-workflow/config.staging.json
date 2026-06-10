@@ -1,3 +1,9 @@
 {
-  "schedule": "*/30 * * * * *"
+  "chainSelectorName": "ethereum-testnet-sepolia",
+  "isTestnet": true,
+  "diamondAddress": "0x0480453eDBb109965A09fF9dbD631Dbdf23df0eB",
+  "strategyId": "0x09c38525b28d44dc55becea5fd68279f6298f752fa82bfb00cbca23fe88fe943",
+  "keeperAddress": "0xbFaB953A4Ad220853745942C0656988bfEcb99Cc",
+  "receiverAddress": "0xbDafE691FC6435Fe94EdBC4aE4fB9932AAc11627",
+  "cronSchedule": "*/30 * * * * *"
 }

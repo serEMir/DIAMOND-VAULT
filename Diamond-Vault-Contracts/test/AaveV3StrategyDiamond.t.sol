@@ -23,13 +23,16 @@ import {VaultPauseFacet} from "../src/vault/facets/VaultPauseFacet.sol";
 import {IVaultPauseAdmin} from "../src/vault/interfaces/IVaultPauseAdmin.sol";
 import {VaultInit} from "../src/vault/upgrade/VaultInit.sol";
 import {IStrategyManager} from "../src/strategy/interfaces/IStrategyManager.sol";
+import {IStrategyKeeper} from "../src/strategy/interfaces/IStrategyKeeper.sol";
 import {IAaveV3StrategyFacet} from "../src/strategy/interfaces/IAaveV3StrategyFacet.sol";
 import {StrategyManagerFacet} from "../src/strategy/facets/StrategyManagerFacet.sol";
+import {StrategyKeeperFacet} from "../src/strategy/facets/StrategyKeeperFacet.sol";
 import {AaveV3StrategyFacet} from "../src/strategy/facets/AaveV3StrategyFacet.sol";
 
 contract AaveV3StrategyDiamondTest is Test {
     address private owner = address(0xA11CE);
     address private alice = address(0xA11CEA);
+    address private keeper = address(0xC0FFEE);
 
     uint256 private constant ONE_USDC = 1e6;
     uint256 private constant ONE_SHARE = 1e18;
@@ -40,6 +43,9 @@ contract AaveV3StrategyDiamondTest is Test {
     MockAavePool private pool;
     MockAToken private aToken;
 
+    // =======================================================================
+    // Setup
+    // =======================================================================
     function setUp() external {
         DiamondCutFacet cutFacet = new DiamondCutFacet();
         diamond = new Diamond(owner, address(cutFacet));
@@ -54,12 +60,13 @@ contract AaveV3StrategyDiamondTest is Test {
         Vault4626Facet vaultFacet = new Vault4626Facet();
         VaultPauseFacet pauseFacet = new VaultPauseFacet();
         StrategyManagerFacet strategyManagerFacet = new StrategyManagerFacet();
+        StrategyKeeperFacet strategyKeeperFacet = new StrategyKeeperFacet();
         AaveV3StrategyFacet aaveStrategyFacet = new AaveV3StrategyFacet();
         VaultInit vaultInit = new VaultInit();
 
         vm.startPrank(owner);
 
-        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](7);
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](8);
         cut[0] = IDiamondCut.FacetCut({
             facetAddress: address(loupeFacet),
             action: IDiamondCut.FacetCutAction.Add,
@@ -95,6 +102,11 @@ contract AaveV3StrategyDiamondTest is Test {
             action: IDiamondCut.FacetCutAction.Add,
             functionSelectors: _selectorsAaveStrategy()
         });
+        cut[7] = IDiamondCut.FacetCut({
+            facetAddress: address(strategyKeeperFacet),
+            action: IDiamondCut.FacetCutAction.Add,
+            functionSelectors: _selectorsStrategyKeeper()
+        });
 
         IDiamondCut(address(diamond))
             .diamondCut(cut, address(diamondInit), abi.encodeWithSelector(DiamondInit.init.selector));
@@ -105,7 +117,6 @@ contract AaveV3StrategyDiamondTest is Test {
                 abi.encodeWithSelector(VaultInit.init.selector, address(usdc), "Diamond Vault Share", "DVS")
             );
 
-        IAaveV3StrategyFacet(address(diamond)).setAaveV3StrategyConfig(AAVE_STRATEGY_ID, address(pool), address(aToken));
         IStrategyManager(address(diamond))
             .registerStrategy(
                 AAVE_STRATEGY_ID,
@@ -113,6 +124,9 @@ contract AaveV3StrategyDiamondTest is Test {
                 IAaveV3StrategyFacet.aaveV3StrategyFreeFunds.selector,
                 IAaveV3StrategyFacet.aaveV3StrategyHarvest.selector
             );
+
+        IAaveV3StrategyFacet(address(diamond)).setAaveV3StrategyConfig(AAVE_STRATEGY_ID, address(pool), address(aToken));
+
         IStrategyManager(address(diamond)).setStrategyActive(AAVE_STRATEGY_ID, true);
 
         vm.stopPrank();
@@ -121,6 +135,10 @@ contract AaveV3StrategyDiamondTest is Test {
         vm.prank(alice);
         usdc.approve(address(diamond), type(uint256).max);
     }
+
+    // =============================================================================
+    // Tests
+    // =============================================================================
 
     function test_allocateToAaveSuppliesUnderlyingAndTracksDebt() external {
         IERC4626 vault = IERC4626(address(diamond));
@@ -165,6 +183,43 @@ contract AaveV3StrategyDiamondTest is Test {
         assertEq(strategyManager.totalStrategyDebt(), 70 * ONE_USDC);
         assertEq(vault.totalAssets(), 110 * ONE_USDC);
         assertEq(vault.convertToAssets(shareToken.balanceOf(alice)), 110 * ONE_USDC);
+    }
+
+    function test_keeperCanHarvestAaveStrategy() external {
+        IERC4626 vault = IERC4626(address(diamond));
+        IStrategyManager strategyManager = IStrategyManager(address(diamond));
+        IStrategyKeeper strategyKeeper = IStrategyKeeper(address(diamond));
+
+        vm.prank(owner);
+        strategyKeeper.setKeeper(keeper);
+
+        vm.prank(alice);
+        vault.deposit(100 * ONE_USDC, alice);
+
+        vm.prank(owner);
+        strategyManager.allocateToStrategy(AAVE_STRATEGY_ID, 60 * ONE_USDC);
+
+        pool.accrueYield(address(diamond), 10 * ONE_USDC);
+
+        vm.prank(keeper);
+        (uint256 reportedAssets, uint256 gain, uint256 loss) = strategyKeeper.keeperHarvestStrategy(AAVE_STRATEGY_ID);
+
+        assertEq(reportedAssets, 70 * ONE_USDC);
+        assertEq(gain, 10 * ONE_USDC);
+        assertEq(loss, 0);
+        assertEq(strategyManager.totalStrategyDebt(), 70 * ONE_USDC);
+        assertEq(vault.totalAssets(), 110 * ONE_USDC);
+    }
+
+    function test_keeperCannotChangeAaveConfig() external {
+        IStrategyKeeper strategyKeeper = IStrategyKeeper(address(diamond));
+
+        vm.prank(owner);
+        strategyKeeper.setKeeper(keeper);
+
+        vm.prank(keeper);
+        vm.expectRevert();
+        IAaveV3StrategyFacet(address(diamond)).setAaveV3StrategyConfig(AAVE_STRATEGY_ID, address(pool), address(aToken));
     }
 
     function test_manualFreeFundsPullsUnderlyingBackFromAave() external {
@@ -214,6 +269,159 @@ contract AaveV3StrategyDiamondTest is Test {
         assertEq(aToken.balanceOf(address(diamond)), 50 * ONE_USDC);
         assertEq(usdc.balanceOf(alice), 950 * ONE_USDC);
     }
+
+    function test_setAaveConfigRevertsWhenStrategyIsNotRegistered() external {
+        bytes32 unregisteredId = keccak256("unregistered-aave-strategy");
+
+        vm.prank(owner);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AaveV3StrategyFacet.AaveV3StrategyFacet__StrategyNotRegistered.selector, unregisteredId
+            )
+        );
+
+        IAaveV3StrategyFacet(address(diamond)).setAaveV3StrategyConfig(unregisteredId, address(pool), address(aToken));
+    }
+
+    function test__setAaveConfigRevertsWhenPoolHasNoCode() external {
+        address invalidPool = address(0xBEEF);
+
+        vm.prank(owner);
+        vm.expectRevert(
+            abi.encodeWithSelector(AaveV3StrategyFacet.AaveV3StrategyFacet__PoolHasNoCode.selector, invalidPool)
+        );
+        IAaveV3StrategyFacet(address(diamond)).setAaveV3StrategyConfig(AAVE_STRATEGY_ID, invalidPool, address(aToken));
+    }
+
+    function test__setAaveConfigRevertsWhenATokenHasNoCode() external {
+        address invalidAToken = address(0xBEEF);
+
+        vm.prank(owner);
+        vm.expectRevert(
+            abi.encodeWithSelector(AaveV3StrategyFacet.AaveV3StrategyFacet__ATokenHasNoCode.selector, invalidAToken)
+        );
+        IAaveV3StrategyFacet(address(diamond)).setAaveV3StrategyConfig(AAVE_STRATEGY_ID, address(pool), invalidAToken);
+    }
+
+    function test__setAaveConfigRevertsWhenATokenUnderlyingMismatch() external {
+        MockUSDC wrongUnderlying = new MockUSDC();
+        MockAavePool wrongPool = new MockAavePool(address(wrongUnderlying));
+        MockAToken wrongAToken = wrongPool.aToken();
+
+        vm.prank(owner);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AaveV3StrategyFacet.AaveV3StrategyFacet__ATokenUnderlyingMismatch.selector,
+                AAVE_STRATEGY_ID,
+                address(usdc),
+                address(wrongUnderlying)
+            )
+        );
+        IAaveV3StrategyFacet(address(diamond))
+            .setAaveV3StrategyConfig(AAVE_STRATEGY_ID, address(pool), address(wrongAToken));
+    }
+
+    function test_setAaveConfigRevertsWhenATokenPoolDoesNotMatchConfiguredPool() external {
+        MockAavePool otherPool = new MockAavePool(address(usdc));
+        MockAToken otherAToken = otherPool.aToken();
+
+        vm.prank(owner);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AaveV3StrategyFacet.AaveV3StrategyFacet__ATokenPoolMismatch.selector,
+                AAVE_STRATEGY_ID,
+                address(pool),
+                address(otherPool)
+            )
+        );
+        IAaveV3StrategyFacet(address(diamond))
+            .setAaveV3StrategyConfig(AAVE_STRATEGY_ID, address(pool), address(otherAToken));
+    }
+
+    function test_setAaveConfigRevertsWhenStrateyDebtisNonZero() external {
+        IERC4626 vault = IERC4626(address(diamond));
+
+        vm.prank(alice);
+        vault.deposit(100 * ONE_USDC, alice);
+
+        vm.prank(owner);
+        IStrategyManager(address(diamond)).allocateToStrategy(AAVE_STRATEGY_ID, 60 * ONE_USDC);
+
+        vm.prank(owner);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AaveV3StrategyFacet.AaveV3StrategyFacet__StrategyConfigLocked.selector,
+                AAVE_STRATEGY_ID,
+                60 * ONE_USDC,
+                60 * ONE_USDC
+            )
+        );
+        IAaveV3StrategyFacet(address(diamond)).setAaveV3StrategyConfig(AAVE_STRATEGY_ID, address(pool), address(aToken));
+    }
+
+    function test_setAaveConfigRevertsWhenATokenBalanceIsNonZeroEvenIfDebtIsZero() external {
+        pool.accrueYield(address(diamond), 1);
+
+        vm.prank(owner);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AaveV3StrategyFacet.AaveV3StrategyFacet__StrategyConfigLocked.selector, AAVE_STRATEGY_ID, 0, 1
+            )
+        );
+        IAaveV3StrategyFacet(address(diamond)).setAaveV3StrategyConfig(AAVE_STRATEGY_ID, address(pool), address(aToken));
+    }
+
+    function test_manualFreeFundsReturnPartialAmountWithoutReportingLoss() external {
+        IERC4626 vault = IERC4626(address(diamond));
+        IStrategyManager strategyManager = IStrategyManager(address(diamond));
+
+        vm.prank(alice);
+        vault.deposit(100 * ONE_USDC, alice);
+
+        vm.prank(owner);
+        strategyManager.allocateToStrategy(AAVE_STRATEGY_ID, 60 * ONE_USDC);
+
+        // Leave only 5 usdc liquid in the mock pool.
+        pool.drainLiquidity(address(0xBEEF), 55 * ONE_USDC);
+
+        vm.prank(owner);
+        (uint256 freedAssets, uint256 loss) = strategyManager.freeFundsFromStrategy(AAVE_STRATEGY_ID, 20 * ONE_USDC);
+
+        (,,,, uint256 debt,,,) = strategyManager.strategyState(AAVE_STRATEGY_ID);
+
+        assertEq(freedAssets, 5 * ONE_USDC);
+        assertEq(loss, 0);
+
+        // Debt should only decrease by what actually came back.
+        assertEq(debt, 55 * ONE_USDC);
+        assertEq(strategyManager.totalStrategyDebt(), 55 * ONE_USDC);
+        assertEq(usdc.balanceOf(address(diamond)), 45 * ONE_USDC);
+        assertEq(usdc.balanceOf(address(pool)), 0);
+        assertEq(aToken.balanceOf(address(diamond)), 55 * ONE_USDC);
+
+        // Total assets now reflects the drianed liquidity loss still sitting in the strategy as debt, but the vault shouldn't report a loss since the manager couldn't have done anything about the liquidity shortage.
+        assertEq(vault.totalAssets(), 100 * ONE_USDC);
+    }
+
+    function test_externalCallerCannotInvokeAaveStrategyExecutionFunctions() external {
+        IAaveV3StrategyFacet aaveStrategyFacet = IAaveV3StrategyFacet(address(diamond));
+
+        vm.startPrank(alice);
+        vm.expectRevert(AaveV3StrategyFacet.AaveV3StrategyFacet__OnlyDiamond.selector);
+        aaveStrategyFacet.aaveV3StrategyDeploy(AAVE_STRATEGY_ID, 10 * ONE_USDC);
+
+        vm.expectRevert(AaveV3StrategyFacet.AaveV3StrategyFacet__OnlyDiamond.selector);
+        aaveStrategyFacet.aaveV3StrategyFreeFunds(AAVE_STRATEGY_ID, 10 * ONE_USDC);
+
+        vm.expectRevert(AaveV3StrategyFacet.AaveV3StrategyFacet__OnlyDiamond.selector);
+        aaveStrategyFacet.aaveV3StrategyHarvest(AAVE_STRATEGY_ID);
+
+        vm.stopPrank();
+    }
+
+    // =============================================================================
+    // Facet Selectors
+    // =============================================================================
 
     function _selectorsLoupe() private pure returns (bytes4[] memory selectors) {
         selectors = new bytes4[](5);
@@ -288,6 +496,13 @@ contract AaveV3StrategyDiamondTest is Test {
         selectors[7] = IStrategyManager.allocateToStrategy.selector;
         selectors[8] = IStrategyManager.freeFundsFromStrategy.selector;
         selectors[9] = IStrategyManager.harvestStrategy.selector;
+    }
+
+    function _selectorsStrategyKeeper() private pure returns (bytes4[] memory selectors) {
+        selectors = new bytes4[](3);
+        selectors[0] = IStrategyKeeper.keeper.selector;
+        selectors[1] = IStrategyKeeper.setKeeper.selector;
+        selectors[2] = IStrategyKeeper.keeperHarvestStrategy.selector;
     }
 
     function _selectorsAaveStrategy() private pure returns (bytes4[] memory selectors) {

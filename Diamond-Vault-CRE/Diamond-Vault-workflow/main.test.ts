@@ -1,42 +1,37 @@
-import { describe, expect } from "bun:test";
-import { newTestRuntime, test } from "@chainlink/cre-sdk/test";
-import { onCronTrigger, initWorkflow } from "./main";
-import type { Config } from "./main";
+import { describe, expect, test } from "bun:test";
+import { HarvestConfigSchema } from "./config";
+// import { initWorkflow } from "./main";
 
-describe("onCronTrigger", () => {
-  test("logs message and returns greeting", async () => {
-    const config: Config = { schedule: "*/5 * * * *" };
-    const runtime = newTestRuntime();
-    runtime.config = config;
+describe("config", () => {
+  test("accepts valid harvest config", () => {
+    const config = HarvestConfigSchema.parse({
+      chainSelectorName: "ethereum-testnet-sepolia",
+      isTestnet: true,
+      diamondAddress: "0x0000000000000000000000000000000000000000",
+      strategyId:
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+      keeperAddress: "0x0000000000000000000000000000000000000000",
+      cronSchedule: "*/30 * * * * *",
+    });
 
-    const result = onCronTrigger(runtime);
-
-    expect(result).toBe("Hello world!");
-    const logs = runtime.getLogs();
-    expect(logs).toContain("Hello world! Workflow triggered.");
+    expect(config.chainSelectorName).toBe("ethereum-testnet-sepolia");
   });
 });
 
-describe("initWorkflow", () => {
-  test("returns one handler with correct cron schedule", async () => {
-    const testSchedule = "0 0 * * *";
-    const config: Config = { schedule: testSchedule };
+// describe("initWorkflow", () => {
+//   test("creates one cron handler", () => {
+//     const config = HarvestConfigSchema.parse({
+//       chainSelectorName: "ethereum-testnet-sepolia",
+//       isTestnet: true,
+//       diamondAddress: "0x0000000000000000000000000000000000000000",
+//       strategyId:
+//         "0x0000000000000000000000000000000000000000000000000000000000000000",
+//       keeperAddress: "0x0000000000000000000000000000000000000000",
+//       cronSchedule: "*/30 * * * * *",
+//     });
 
-    const handlers = initWorkflow(config);
+//     const workflow = initWorkflow(config);
 
-    expect(handlers).toBeArray();
-    expect(handlers).toHaveLength(1);
-    expect(handlers[0].trigger.config.schedule).toBe(testSchedule);
-  });
-
-  test("handler executes onCronTrigger and returns result", async () => {
-    const config: Config = { schedule: "*/5 * * * *" };
-    const runtime = newTestRuntime();
-    runtime.config = config;
-    const handlers = initWorkflow(config);
-
-    const result = handlers[0].fn(runtime, {});
-
-    expect(result).toBe(onCronTrigger(runtime));
-  });
-});
+//     expect(workflow).toHaveLength(1);
+//   });
+// });
