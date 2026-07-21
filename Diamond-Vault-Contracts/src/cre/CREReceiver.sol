@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import {IStrategyKeeper} from "../strategy/interfaces/IStrategyKeeper.sol";
+import {IERC165} from "../diamond/interfaces/IERC165.sol";
+
+interface ICREReceiver {
+    function onReport(bytes calldata metadata, bytes calldata report) external;
+}
+
 /**
  * @title CREReceiver
  * @notice Receives signed reports from CRE and executes them on the Diamond vault.
@@ -10,6 +17,8 @@ contract CREReceiver {
     error CREReceiver__UnauthorizedCaller(address caller, address forwarder);
     error CREReceiver__ReportAlreadyExecuted(bytes32 reportId);
     error CREReceiver__DiamondCallFailed(bytes returndata);
+    error CREReceiver__InvalidReportPayload(bytes payload);
+    error CREReceiver__InvalidSelector(bytes4 selector);
 
     address public immutable i_diamond;
     address public immutable i_creForwarder;
@@ -18,38 +27,43 @@ contract CREReceiver {
     mapping(bytes32 => bool) public executedReports;
 
     event ReportExecuted(bytes32 indexed reportId, bytes payload);
-    event ReportExecutionFailed(bytes32 indexed reportId, bytes payload, string reason);
 
     constructor(address diamond, address creForwarder) {
         i_diamond = diamond;
         i_creForwarder = creForwarder;
     }
 
-    /**
-     * @notice Executes a report from CRE on the Diamond vault.
-     * @param reportId Unique identifier for this report (prevents replays)
-     * @param payload The encoded function call to execute on the Diamond
-     * @dev Only the CRE forwarder can call this function.
-     * @dev Each reportId can only be executed once (idempotent).
-     */
-    function executeReport(bytes32 reportId, bytes calldata payload) external {
+    function onReport(bytes calldata metadata, bytes calldata report) external {
         if (msg.sender != i_creForwarder) {
             revert CREReceiver__UnauthorizedCaller(msg.sender, i_creForwarder);
         }
-        if (executedReports[reportId]) {
-            revert CREReceiver__ReportAlreadyExecuted(reportId);
+
+        bytes32 reportKey = keccak256(abi.encode(metadata, report));
+        if (executedReports[reportKey]) {
+            revert CREReceiver__ReportAlreadyExecuted(reportKey);
         }
 
-        // Mark as executed before calling (prevents reentrancy)
-        executedReports[reportId] = true;
+        if (report.length != 36) {
+            revert CREReceiver__InvalidReportPayload(report);
+        }
 
-        (bool success, bytes memory returndata) = i_diamond.call(payload);
+        bytes4 selector = bytes4(report[:4]);
+        if (selector != IStrategyKeeper.keeperHarvestStrategy.selector) {
+            revert CREReceiver__InvalidSelector(selector);
+        }
 
+        executedReports[reportKey] = true;
+
+        (bool success, bytes memory returndata) = i_diamond.call(report);
         if (!success) {
             revert CREReceiver__DiamondCallFailed(returndata);
         }
 
-        emit ReportExecuted(reportId, payload);
+        emit ReportExecuted(reportKey, report);
+    }
+
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == type(ICREReceiver).interfaceId;
     }
 
     /**
