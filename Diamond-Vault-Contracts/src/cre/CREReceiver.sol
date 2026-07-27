@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {IStrategyKeeper} from "../strategy/interfaces/IStrategyKeeper.sol";
+import {IStrategyManager} from "../strategy/interfaces/IStrategyManager.sol";
 import {IERC165} from "../diamond/interfaces/IERC165.sol";
 
 interface ICREReceiver {
@@ -43,12 +44,17 @@ contract CREReceiver {
             revert CREReceiver__ReportAlreadyExecuted(reportKey);
         }
 
-        if (report.length != 36) {
+        // Allow harvest (selector + bytes32) or allocate/free (selector + bytes32 + uint256)
+        if (report.length != 36 && report.length != 68) {
             revert CREReceiver__InvalidReportPayload(report);
         }
 
         bytes4 selector = bytes4(report[:4]);
-        if (selector != IStrategyKeeper.keeperHarvestStrategy.selector) {
+        bool isAllowed = selector == IStrategyKeeper.keeperHarvestStrategy.selector
+            || selector == IStrategyManager.allocateToStrategy.selector
+            || selector == IStrategyManager.freeFundsFromStrategy.selector;
+
+        if (!isAllowed) {
             revert CREReceiver__InvalidSelector(selector);
         }
 

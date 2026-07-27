@@ -12,6 +12,10 @@ import {LibVaultControl} from "../../vault/libraries/LibVaultControl.sol";
  * @notice Facet that manages strategy registration, activation, allocation, and harvest flows.
  */
 contract StrategyManagerFacet is IStrategyManager {
+    error StrategyManagerFacet__NotAuthorized(address caller);
+
+    event CREExecutorUpdated(address previous, address current);
+
     /**
      * @notice Returns the ids of all registered strategies.
      * @return ids The registered strategy ids.
@@ -86,6 +90,22 @@ contract StrategyManagerFacet is IStrategyManager {
     }
 
     /**
+     * @notice Returns the configured CRE executor address.
+     */
+    function creExecutor() external view returns (address) {
+        return LibStrategyStorage.creExecutor();
+    }
+
+    /**
+     * @notice Sets the CRE executor address. Owner-only.
+     */
+    function setCREExecutor(address newExecutor) external {
+        LibDiamond.enforceIsContractOwner();
+        address previous = LibStrategyStorage.setCreExecutor(newExecutor);
+        emit CREExecutorUpdated(previous, newExecutor);
+    }
+
+    /**
      * @notice Sets whether a strategy is active.
      * @param strategyId The strategy to update.
      * @param active The new active state.
@@ -134,7 +154,11 @@ contract StrategyManagerFacet is IStrategyManager {
      */
     function allocateToStrategy(bytes32 strategyId, uint256 assets) external returns (uint256 deployedAssets) {
         LibReentrancyGuard.enter();
-        LibDiamond.enforceIsContractOwner();
+        {
+            address owner = LibDiamond.contractOwner();
+            address creExec = LibStrategyStorage.creExecutor();
+            if (msg.sender != owner && msg.sender != creExec) revert StrategyManagerFacet__NotAuthorized(msg.sender);
+        }
         deployedAssets = LibStrategyStorage.deployToStrategy(strategyId, assets);
         (,,,, uint256 debt,,,) = this.strategyState(strategyId);
         LibReentrancyGuard.exit();
@@ -153,7 +177,11 @@ contract StrategyManagerFacet is IStrategyManager {
         returns (uint256 freedAssets, uint256 loss)
     {
         LibReentrancyGuard.enter();
-        LibDiamond.enforceIsContractOwner();
+        {
+            address owner = LibDiamond.contractOwner();
+            address creExec = LibStrategyStorage.creExecutor();
+            if (msg.sender != owner && msg.sender != creExec) revert StrategyManagerFacet__NotAuthorized(msg.sender);
+        }
         (freedAssets, loss) = LibStrategyStorage.freeFundsFromStrategy(strategyId, assets);
         (,,,, uint256 debt,,,) = this.strategyState(strategyId);
         LibReentrancyGuard.exit();

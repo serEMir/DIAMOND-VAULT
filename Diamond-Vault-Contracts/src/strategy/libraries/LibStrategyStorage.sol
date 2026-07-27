@@ -45,6 +45,7 @@ library LibStrategyStorage {
         bytes32[] strategyIds;
         mapping(bytes32 => StrategyConfig) strategies;
         uint256 totalDebt;
+        address creExecutor;
     }
 
     /**
@@ -373,5 +374,24 @@ library LibStrategyStorage {
             }
         }
         return returndata;
+    }
+
+    /**
+     * @notice Returns the configured CRE executor address.
+     * @return executor The CRE executor address stored in strategy storage.
+     */
+    function creExecutor() internal view returns (address executor) {
+        executor = strategyStorage().creExecutor;
+    }
+
+    /**
+     * @notice Sets the CRE executor address in storage and returns the previous value.
+     * @param newExecutor The address to set as the CRE executor.
+     * @return previous The previous CRE executor address.
+     */
+    function setCreExecutor(address newExecutor) internal returns (address previous) {
+        StrategyStorage storage ss = strategyStorage();
+        previous = ss.creExecutor;
+        ss.creExecutor = newExecutor;
     }
 }
