@@ -271,7 +271,7 @@ contract CREReceiverTest is Test {
 
     function test_supportsCREReceiverInterface() external view {
         assertTrue(receiver.supportsInterface(type(ICREReceiver).interfaceId));
-        // assertTrue(receiver.supportsInterface(type(IERC165).interfaceId));
+        assertTrue(receiver.supportsInterface(type(IERC165).interfaceId));
     }
 
     // ============================================================================

@@ -6,7 +6,7 @@ import {
     cre,
 } from "@chainlink/cre-sdk";
 
-import { bytesToHex, zeroAddress, type Address, type Hex } from "viem";
+import { bytesToHex, zeroAddress, type Hex } from "viem";
 import type { HarvestConfig } from "./config";
 import {
     encodeKeeperHarvestCall,
@@ -14,18 +14,15 @@ import {
     decodeStrategyHarvestedLog
 } from "./utils/evm-client";
 
-// export type HarvestResult = {
-//     status: "submitted";
-//     strategyId: string;
-// };
 
 export type HarvestResult = {
-    status: "success";
+    status: "submitted";
     strategyId: string;
-    reportedAssets: bigint;
-    gain: bigint;
-    loss: bigint;
-    txHash: string;
+    txHash?: string;
+    receiptStatus: "unavailable" | "pending" | "confirmed" | "confirmed_without_harvest_event";
+    reportedAssets?: bigint;
+    gain?: bigint;
+    loss?: bigint;
 };
 
 export function harvestCallback(runtime: Runtime<HarvestConfig>): HarvestResult {
@@ -47,7 +44,6 @@ export function harvestCallback(runtime: Runtime<HarvestConfig>): HarvestResult 
     }
 
     // Normalize addresses
-    const diamondAddress = normalizeAddress(config.diamondAddress);
     const keeperAddress = normalizeAddress(config.keeperAddress || zeroAddress);
     const receiverAddress = normalizeAddress(config.receiverAddress || zeroAddress);
 
@@ -59,136 +55,79 @@ export function harvestCallback(runtime: Runtime<HarvestConfig>): HarvestResult 
         throw new Error("Receiver address not configured");
     }
 
-    // Create EVM client
     const evmClient = new cre.capabilities.EVMClient(network.chainSelector.selector);
 
-    // Encode the harvest call
-    const harvestCallData = encodeKeeperHarvestCall(config.strategyId as Hex);
-
-    runtime.log(
-        `harvest calldata encoded - strategyId: ${config.strategyId}, calldata: ${harvestCallData}`
-    );
+    const callData = encodeKeeperHarvestCall(config.strategyId as Hex);
+    runtime.log(`harvest calldata encoded - strategyId: ${config.strategyId}, calldata: ${callData}`);
 
     // Create and submit report
-    const report = runtime.report(prepareReportRequest(harvestCallData)).result();
+    const report = runtime.report(prepareReportRequest(callData)).result();
 
     runtime.log(`report created - submitting to receiver: ${receiverAddress}`);
 
-    const writeResult = evmClient
-        .writeReport(runtime, {
-            receiver: receiverAddress,
-            report,
-        })
-        .result();
-    
-    // Debug: print detailed diagnostics for writeResult (keys, types, lengths)
-    try {
-        const keys = Object.keys(writeResult as Record<string, unknown>);
-        runtime.log(`writeResult.keys: ${keys.join(",")}`);
+    const writeResult = evmClient.writeReport(runtime, {
+        receiver: receiverAddress,
+        report,
+    }).result();
 
-        for (const k of keys) {
-            const v = (writeResult as any)[k];
-            if (v === null || v === undefined) {
-                runtime.log(`${k}: null`);
-                continue;
-            }
-
-            if (v instanceof Uint8Array) {
-                try {
-                    runtime.log(`${k}: Uint8Array length=${v.length} hex=${bytesToHex(v)}`);
-                } catch {
-                    runtime.log(`${k}: Uint8Array length=${v.length}`);
-                }
-                continue;
-            }
-
-            if (Array.isArray(v)) {
-                runtime.log(`${k}: Array length=${v.length}`);
-                continue;
-            }
-
-            const t = typeof v;
-            if (t === "object") {
-                try {
-                    runtime.log(`${k}: ${JSON.stringify(v)}`);
-                } catch {
-                    runtime.log(`${k}: [object]`);
-                }
-            } else {
-                runtime.log(`${k}: ${String(v)}`);
-            }
-        }
-    } catch (err) {
-        runtime.log(`writeResult debug failed: ${String(err)}`);
+    if (writeResult.txStatus !== 2) {
+        throw new Error(
+            `writeReport failed with txStatus=${writeResult.txStatus}: ${writeResult.errorMessage ?? "no error message"}`
+        );
     }
 
-    if (typeof (writeResult as any).txHash !== "undefined") {
-        const txHashValue = (writeResult as any).txHash;
-        if (txHashValue instanceof Uint8Array) {
-            runtime.log(`txHash (raw): ${bytesToHex(txHashValue)}`);
-        } else {
-            runtime.log(`txHash: ${String(txHashValue)}`);
-        }
-    } else {
-        runtime.log("txHash: undefined");
-    }
-
-    if (typeof (writeResult as any).errorMessage !== "undefined") {
-        runtime.log(`errorMessage: ${String((writeResult as any).errorMessage)}`);
+    if (writeResult.receiverContractExecutionStatus === 1) {
+        throw new Error("CRE receiver reverted while executing the harvest report");
     }
 
     const txHash = writeResult.txHash ? bytesToHex(writeResult.txHash) : undefined;
-
     if (!txHash) {
-        runtime.log("writeResult has no txHash; this may be a simulator-only response.");
-        if (writeResult.txStatus !== 2) {
-            throw new Error(`writeReport failed with txStatus=${writeResult.txStatus}`);
-        }
-        if (writeResult.receiverContractExecutionStatus !== 0) {
-            throw new Error(`receiver execution failed with status=${writeResult.receiverContractExecutionStatus}`);
-        }
-
         runtime.log(`harvest report submitted - strategyId: ${config.strategyId}`);
         return {
-            status: "success",
+            status: "submitted",
             strategyId: config.strategyId,
-            reportedAssets: 0n,
-            gain: 0n,
-            loss: 0n,
-            txHash: "simulation",
+            receiptStatus: "unavailable",
         };
     }
 
-    runtime.log(`harvest report submitted - strategyId: ${config.strategyId}`);
-
-    const receipt = evmClient
-        .getTransactionReceipt(runtime, {
-            hash: txHash,
-        })
-        .result();
-    
-    if (!receipt.receipt) {
-    throw new Error("No receipt data returned yet");
+    const receiptReply = evmClient.getTransactionReceipt(runtime, {hash: txHash}).result();
+    if (!receiptReply.receipt) {
+        runtime.log(`harvest submitted - transaction pending: ${txHash}`);
+        return {
+            status: "submitted",
+            strategyId: config.strategyId,
+            txHash,
+            receiptStatus: "pending",
+        };
     }
-    
-    for (const log of receipt.receipt.logs) {
-        const harvest = decodeStrategyHarvestedLog(log);
 
+    if (receiptReply.receipt.status !== 1n) {
+        throw new Error(`harvest transaction reverted: ${txHash}`);
+    }
+
+    for (const log of receiptReply.receipt.logs) {
+        const harvest = decodeStrategyHarvestedLog(log);
         if (harvest) {
             runtime.log(
                 `Harvested: debt=${harvest.reportedDebt} gain=${harvest.gain} loss=${harvest.loss}`
             );
             return {
-                status: "success",
+                status: "submitted",
                 strategyId: harvest.strategyId,
                 reportedAssets: harvest.reportedDebt,
                 gain: harvest.gain,
                 loss: harvest.loss,
                 txHash,
+                receiptStatus: "confirmed",
             };
         }
     }
-    throw new Error(
-    `StrategyHarvested event not found in transaction receipt ${txHash}`
-    );
+
+    runtime.log(`harvest submitted but StrategyHarvested was not in receipt logs: ${txHash}`);
+    return {
+        status: "submitted",
+        strategyId: config.strategyId,
+        txHash,
+        receiptStatus: "confirmed_without_harvest_event",
+    };
 }

@@ -1,3 +1,4 @@
+import {readFileSync} from "node:fs";
 import {z} from "zod";
 
 const addressSchema = z
@@ -27,7 +28,6 @@ export function loadConfig(rawConfig: unknown): HarvestConfig {
 }
 
 export function loadConfigFromFile(filePath: string): HarvestConfig {
-    const fs = require("fs");
-    const rawData = fs.readFileSync(filePath, "utf-8");
+    const rawData = readFileSync(filePath, "utf-8");
     return loadConfig(JSON.parse(rawData));
 }

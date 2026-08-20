@@ -2,7 +2,6 @@
 pragma solidity ^0.8.20;
 
 import {IStrategyKeeper} from "../strategy/interfaces/IStrategyKeeper.sol";
-import {IStrategyManager} from "../strategy/interfaces/IStrategyManager.sol";
 import {IERC165} from "../diamond/interfaces/IERC165.sol";
 
 interface ICREReceiver {
@@ -14,7 +13,7 @@ interface ICREReceiver {
  * @notice Receives signed reports from CRE and executes them on the Diamond vault.
  * @dev Only the authorized CRE forwarder can submit reports.
  */
-contract CREReceiver {
+contract CREReceiver is ICREReceiver, IERC165 {
     error CREReceiver__UnauthorizedCaller(address caller, address forwarder);
     error CREReceiver__ReportAlreadyExecuted(bytes32 reportId);
     error CREReceiver__DiamondCallFailed(bytes returndata);
@@ -34,7 +33,7 @@ contract CREReceiver {
         i_creForwarder = creForwarder;
     }
 
-    function onReport(bytes calldata metadata, bytes calldata report) external {
+    function onReport(bytes calldata metadata, bytes calldata report) external override {
         if (msg.sender != i_creForwarder) {
             revert CREReceiver__UnauthorizedCaller(msg.sender, i_creForwarder);
         }
@@ -44,17 +43,12 @@ contract CREReceiver {
             revert CREReceiver__ReportAlreadyExecuted(reportKey);
         }
 
-        // Allow harvest (selector + bytes32) or allocate/free (selector + bytes32 + uint256)
-        if (report.length != 36 && report.length != 68) {
+        if (report.length != 36) {
             revert CREReceiver__InvalidReportPayload(report);
         }
 
         bytes4 selector = bytes4(report[:4]);
-        bool isAllowed = selector == IStrategyKeeper.keeperHarvestStrategy.selector
-            || selector == IStrategyManager.allocateToStrategy.selector
-            || selector == IStrategyManager.freeFundsFromStrategy.selector;
-
-        if (!isAllowed) {
+        if (selector != IStrategyKeeper.keeperHarvestStrategy.selector) {
             revert CREReceiver__InvalidSelector(selector);
         }
 
@@ -68,8 +62,8 @@ contract CREReceiver {
         emit ReportExecuted(reportKey, report);
     }
 
-    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
-        return interfaceId == type(ICREReceiver).interfaceId;
+    function supportsInterface(bytes4 interfaceId) external pure override returns (bool) {
+        return interfaceId == type(ICREReceiver).interfaceId || interfaceId == type(IERC165).interfaceId;
     }
 
     /**

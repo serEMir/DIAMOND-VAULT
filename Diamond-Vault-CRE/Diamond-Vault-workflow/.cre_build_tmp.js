@@ -205,6 +205,7 @@ var AbiEncodingLengthMismatchError;
 var AbiEventSignatureEmptyTopicsError;
 var AbiEventSignatureNotFoundError;
 var AbiFunctionNotFoundError;
+var AbiFunctionOutputsNotFoundError;
 var AbiItemAmbiguityError;
 var DecodeLogDataMismatch;
 var DecodeLogTopicsMismatch;
@@ -311,6 +312,19 @@ var init_abi = __esm(() => {
 `), {
         docsPath,
         name: "AbiFunctionNotFoundError"
+      });
+    }
+  };
+  AbiFunctionOutputsNotFoundError = class AbiFunctionOutputsNotFoundError2 extends BaseError {
+    constructor(functionName, { docsPath }) {
+      super([
+        `Function "${functionName}" does not contain any \`outputs\` on ABI.`,
+        "Cannot decode function result without knowing what the parameter types are.",
+        "Make sure you are using the correct ABI and that the function exists on it."
+      ].join(`
+`), {
+        docsPath,
+        name: "AbiFunctionOutputsNotFoundError"
       });
     }
   };
@@ -2050,6 +2064,32 @@ var init_decodeAbiParameters = __esm(() => {
   init_toBytes();
   init_toHex();
   init_encodeAbiParameters();
+});
+function decodeFunctionResult(parameters) {
+  const { abi, args, functionName, data } = parameters;
+  let abiItem = abi[0];
+  if (functionName) {
+    const item = getAbiItem({ abi, args, name: functionName });
+    if (!item)
+      throw new AbiFunctionNotFoundError(functionName, { docsPath: docsPath3 });
+    abiItem = item;
+  }
+  if (abiItem.type !== "function")
+    throw new AbiFunctionNotFoundError(undefined, { docsPath: docsPath3 });
+  if (!abiItem.outputs)
+    throw new AbiFunctionOutputsNotFoundError(abiItem.name, { docsPath: docsPath3 });
+  const values = decodeAbiParameters(abiItem.outputs, data);
+  if (values && values.length > 1)
+    return values;
+  if (values && values.length === 1)
+    return values[0];
+  return;
+}
+var docsPath3 = "/docs/contract/decodeFunctionResult";
+var init_decodeFunctionResult = __esm(() => {
+  init_abi();
+  init_decodeAbiParameters();
+  init_getAbiItem();
 });
 function isMessage(arg, schema) {
   const isMessage2 = arg !== null && typeof arg == "object" && "$typeName" in arg && typeof arg.$typeName == "string";
@@ -16248,6 +16288,8 @@ var HarvestConfigSchema = exports_external.object({
   isTestnet: exports_external.boolean().default(true),
   diamondAddress: addressSchema,
   strategyId: bytes32Schema,
+  action: exports_external.enum(["deploy", "free", "harvest"]).default("harvest"),
+  assets: exports_external.string().optional(),
   keeperAddress: addressSchema.optional(),
   receiverAddress: addressSchema.optional(),
   cronSchedule: exports_external.string().min(1)
@@ -16331,6 +16373,7 @@ function decodeTopic({ param, value: value2 }) {
   return decodedArg[0];
 }
 var zeroAddress = "0x0000000000000000000000000000000000000000";
+init_decodeFunctionResult();
 init_encodeFunctionData();
 init_toHex();
 init_getAddress();
@@ -16397,6 +16440,58 @@ function encodeKeeperHarvestCall(strategyId) {
     args: [strategyId]
   });
 }
+var STRATEGY_MANAGER_ABI = [
+  {
+    name: "allocateToStrategy",
+    type: "function",
+    inputs: [{ type: "bytes32", name: "strategyId" }, { type: "uint256", name: "assets" }],
+    outputs: [{ type: "uint256", name: "deployedAssets" }],
+    stateMutability: "nonpayable"
+  },
+  {
+    name: "freeFundsFromStrategy",
+    type: "function",
+    inputs: [{ type: "bytes32", name: "strategyId" }, { type: "uint256", name: "assets" }],
+    outputs: [{ type: "uint256", name: "freedAssets" }, { type: "uint256", name: "loss" }],
+    stateMutability: "nonpayable"
+  }
+];
+function encodeAllocateCall(strategyId, assets) {
+  return encodeFunctionData({
+    abi: STRATEGY_MANAGER_ABI,
+    functionName: "allocateToStrategy",
+    args: [strategyId, BigInt(String(assets))]
+  });
+}
+function encodeFreeCall(strategyId, assets) {
+  return encodeFunctionData({
+    abi: STRATEGY_MANAGER_ABI,
+    functionName: "freeFundsFromStrategy",
+    args: [strategyId, BigInt(String(assets))]
+  });
+}
+function decodeAllocateResult(data) {
+  const result = decodeFunctionResult({
+    abi: STRATEGY_MANAGER_ABI,
+    functionName: "allocateToStrategy",
+    data
+  });
+  if (Array.isArray(result)) {
+    return result[0];
+  }
+  return result;
+}
+function decodeFreeResult(data) {
+  const result = decodeFunctionResult({
+    abi: STRATEGY_MANAGER_ABI,
+    functionName: "freeFundsFromStrategy",
+    data
+  });
+  if (Array.isArray(result)) {
+    return { freedAssets: result[0], loss: result[1] };
+  }
+  return { freedAssets: 0n, loss: 0n };
+}
 function decodeStrategyHarvestedLog(log) {
   try {
     const topics = log.topics.map((topic) => bytesToHex(topic));
@@ -16443,40 +16538,174 @@ function harvestCallback(runtime2) {
     throw new Error("Receiver address not configured");
   }
   const evmClient = new cre.capabilities.EVMClient(network248.chainSelector.selector);
-  const harvestCallData = encodeKeeperHarvestCall(config.strategyId);
-  runtime2.log(`harvest calldata encoded - strategyId: ${config.strategyId}, calldata: ${harvestCallData}`);
-  const report2 = runtime2.report(prepareReportRequest(harvestCallData)).result();
+  let callData;
+  const action = config.action || "harvest";
+  if (action === "harvest") {
+    callData = encodeKeeperHarvestCall(config.strategyId);
+    runtime2.log(`harvest calldata encoded - strategyId: ${config.strategyId}, calldata: ${callData}`);
+  } else if (action === "deploy") {
+    if (!config.assets)
+      throw new Error("assets must be provided for deploy action");
+    callData = encodeAllocateCall(config.strategyId, config.assets);
+    runtime2.log(`deploy calldata encoded - strategyId: ${config.strategyId}, assets: ${config.assets}, calldata: ${callData}`);
+  } else if (action === "free") {
+    if (!config.assets)
+      throw new Error("assets must be provided for free action");
+    callData = encodeFreeCall(config.strategyId, config.assets);
+    runtime2.log(`free calldata encoded - strategyId: ${config.strategyId}, assets: ${config.assets}, calldata: ${callData}`);
+  } else {
+    throw new Error(`Unsupported action: ${action}`);
+  }
+  const report2 = runtime2.report(prepareReportRequest(callData)).result();
   runtime2.log(`report created - submitting to receiver: ${receiverAddress}`);
-  const writeResult = evmClient.writeReport(runtime2, {
-    receiver: receiverAddress,
-    report: report2
-  }).result();
-  if (!writeResult.txHash) {
-    throw new Error("writeReport returned no transaction hash");
-  }
-  const txHash = bytesToHex(writeResult.txHash);
-  runtime2.log(`harvest report submitted - strategyId: ${config.strategyId}`);
-  const receipt = evmClient.getTransactionReceipt(runtime2, {
-    hash: txHash
-  }).result();
-  if (!receipt.receipt) {
-    throw new Error("No receipt data returned yet");
-  }
-  for (const log of receipt.receipt.logs) {
-    const harvest = decodeStrategyHarvestedLog(log);
-    if (harvest) {
-      runtime2.log(`Harvested: debt=${harvest.reportedDebt} gain=${harvest.gain} loss=${harvest.loss}`);
-      return {
-        status: "success",
-        strategyId: harvest.strategyId,
-        reportedAssets: harvest.reportedDebt,
-        gain: harvest.gain,
-        loss: harvest.loss,
-        txHash
-      };
+  if (action === "deploy" || action === "free") {
+    try {
+      const preflight = evmClient.call(runtime2, { to: diamondAddress, data: callData }).result();
+      try {
+        runtime2.log(`preflight.result: ${JSON.stringify(preflight)}`);
+      } catch {
+        runtime2.log(`preflight result available (non-serializable)`);
+      }
+      if (preflight.returnValue) {
+        const raw = preflight.returnValue;
+        let hex;
+        if (raw instanceof Uint8Array) {
+          hex = bytesToHex(raw);
+        } else if (typeof raw === "string") {
+          hex = raw;
+        }
+        if (hex) {
+          if (action === "deploy") {
+            const deployed = decodeAllocateResult(hex);
+            runtime2.log(`preflight allocateToStrategy returned deployedAssets=${String(deployed)}`);
+          } else {
+            const freed = decodeFreeResult(hex);
+            runtime2.log(`preflight freeFundsFromStrategy returned freedAssets=${String(freed.freedAssets)} loss=${String(freed.loss)}`);
+          }
+        }
+      }
+    } catch (err) {
+      runtime2.log(`preflight call failed: ${String(err)}`);
     }
   }
-  throw new Error(`StrategyHarvested event not found in transaction receipt ${txHash}`);
+  const writeResult = evmClient.writeReport(runtime2, {
+    receiver: receiverAddress,
+    report: report2,
+    gasConfig: {
+      gasLimit: "5000000"
+    }
+  }).result();
+  try {
+    const keys = Object.keys(writeResult);
+    runtime2.log(`writeResult.keys: ${keys.join(",")}`);
+    for (const k of keys) {
+      const v = writeResult[k];
+      if (v === null || v === undefined) {
+        runtime2.log(`${k}: null`);
+        continue;
+      }
+      if (v instanceof Uint8Array) {
+        try {
+          runtime2.log(`${k}: Uint8Array length=${v.length} hex=${bytesToHex(v)}`);
+        } catch {
+          runtime2.log(`${k}: Uint8Array length=${v.length}`);
+        }
+        continue;
+      }
+      if (Array.isArray(v)) {
+        runtime2.log(`${k}: Array length=${v.length}`);
+        continue;
+      }
+      const t = typeof v;
+      if (t === "object") {
+        try {
+          runtime2.log(`${k}: ${JSON.stringify(v)}`);
+        } catch {
+          runtime2.log(`${k}: [object]`);
+        }
+      } else {
+        runtime2.log(`${k}: ${String(v)}`);
+      }
+    }
+  } catch (err) {
+    runtime2.log(`writeResult debug failed: ${String(err)}`);
+  }
+  if (typeof writeResult.txHash !== "undefined") {
+    const txHashValue = writeResult.txHash;
+    if (txHashValue instanceof Uint8Array) {
+      runtime2.log(`txHash (raw): ${bytesToHex(txHashValue)}`);
+    } else {
+      runtime2.log(`txHash: ${String(txHashValue)}`);
+    }
+  } else {
+    runtime2.log("txHash: undefined");
+  }
+  if (typeof writeResult.errorMessage !== "undefined") {
+    runtime2.log(`errorMessage: ${String(writeResult.errorMessage)}`);
+  }
+  try {
+    const fee = writeResult.transactionFee;
+    if (fee !== undefined) {
+      if (typeof fee === "object") {
+        try {
+          runtime2.log(`transactionFee: ${JSON.stringify(fee, null, 2)}`);
+        } catch {
+          runtime2.log(`transactionFee: [object]`);
+        }
+      } else {
+        runtime2.log(`transactionFee: ${String(fee)}`);
+      }
+    }
+  } catch {}
+  const txHash = writeResult.txHash ? bytesToHex(writeResult.txHash) : undefined;
+  if (!txHash) {
+    runtime2.log("writeResult has no txHash; this may be a simulator-only response.");
+    if (writeResult.txStatus !== 2) {
+      throw new Error(`writeReport failed with txStatus=${writeResult.txStatus}`);
+    }
+    if (writeResult.receiverContractExecutionStatus !== 0) {
+      throw new Error(`receiver execution failed with status=${writeResult.receiverContractExecutionStatus}`);
+    }
+    runtime2.log(`harvest report submitted - strategyId: ${config.strategyId}`);
+    return {
+      status: "success",
+      strategyId: config.strategyId,
+      reportedAssets: 0n,
+      gain: 0n,
+      loss: 0n,
+      txHash: "simulation"
+    };
+  }
+  runtime2.log(`harvest report submitted - strategyId: ${config.strategyId}`);
+  runtime2.log(`txHash ${txHash} available; looking for receipt data inside writeResult.`);
+  const writeReceipt = writeResult.receipt;
+  if (writeReceipt && writeReceipt.logs) {
+    for (const log of writeReceipt.logs) {
+      const harvest = decodeStrategyHarvestedLog(log);
+      if (harvest) {
+        runtime2.log(`Harvested: debt=${harvest.reportedDebt} gain=${harvest.gain} loss=${harvest.loss}`);
+        return {
+          status: "success",
+          strategyId: harvest.strategyId,
+          reportedAssets: harvest.reportedDebt,
+          gain: harvest.gain,
+          loss: harvest.loss,
+          txHash
+        };
+      }
+    }
+    runtime2.log(`StrategyHarvested event not found in writeResult receipt logs; returning success with txHash.`);
+  } else {
+    runtime2.log("No receipt available in writeResult; returning success with txHash.");
+  }
+  return {
+    status: "success",
+    strategyId: config.strategyId,
+    reportedAssets: 0n,
+    gain: 0n,
+    loss: 0n,
+    txHash
+  };
 }
 function initWorkflow(config) {
   const cron = new cre.capabilities.CronCapability;

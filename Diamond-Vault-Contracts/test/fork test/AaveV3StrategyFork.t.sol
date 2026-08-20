@@ -32,12 +32,12 @@ contract AaveV3StrategyFork is Test {
     // STATE VARIABLES
     // ============================================================================
 
-    address private constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
-    address private constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
-    address private constant A_USDC = 0x98C23E9d8f34FEFb1B7BD6a91B7FF122F4e16F5c;
+    address private constant USDC = 0x94a9D9AC8a22534E3FaCa9F4e7F2E2cf85d5E4C8;
+    address private constant AAVE_POOL = 0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951;
+    address private constant A_USDC = 0x16dA4541aD1807f4443d92D26044C1147406EB80;
     bytes32 private constant AAVE_STRATEGY_ID = keccak256("aave-v3-usdc-strategy");
 
-    address private owner = address(0xA11CE);
+    address private owner = makeAddr("OWNER");
     address private alice = address(0xA11CEA);
 
     Diamond private diamond;
@@ -53,8 +53,8 @@ contract AaveV3StrategyFork is Test {
     // ============================================================================
 
     function setUp() public {
-        string memory rpcUrl = vm.envString("MAINNET_RPC_URL");
-        vm.createSelectFork(rpcUrl);
+        string memory rpcUrl = vm.envString("SEPOLIA_RPC_URL");
+        vm.createSelectFork(rpcUrl, 7000_000);
 
         usdc = IERC20(USDC);
         aToken = IERC20(A_USDC);
