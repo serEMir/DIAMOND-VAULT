@@ -48,13 +48,14 @@ contract AaveV3StrategyFork is Test {
     uint256 private constant ONE_USDC = 1e6;
     uint256 private constant ONE_SHARE = 1e18;
 
+    string private constant FORK_RPC_URL = "https://eth-sepolia.g.alchemy.com/v2/Tr3oyihaxVBwoJei5thaWXAJaD0TECV2";
+
     // ============================================================================
     // SETUP
     // ============================================================================
 
     function setUp() public {
-        string memory rpcUrl = vm.envString("SEPOLIA_RPC_URL");
-        vm.createSelectFork(rpcUrl, 7000_000);
+        vm.createSelectFork(FORK_RPC_URL, 7000_000);
 
         usdc = IERC20(USDC);
         aToken = IERC20(A_USDC);
