@@ -156,13 +156,12 @@ bun run test
 ### Simulate Workflow Locally
 
 ```bash
-# Simulate a harvest operation
+# Simulate against the configured CRE target
 cre workflow simulate Diamond-Vault-workflow \
-  --target harvest-aave-strategy \
-  --network sepolia
+  --target staging-settings
 ```
 
-This runs your workflow against a local fork of the network without broadcasting actual transactions.
+This runs the workflow using the target configuration defined in the project, without broadcasting any real transactions.
 
 ### Interactive Development
 
@@ -181,7 +180,7 @@ Load and test individual workflow actions:
 
 Enable verbose logging:
 ```bash
-DEBUG=diamondvault:* cre workflow simulate Diamond-Vault-workflow --target harvest-aave-strategy
+DEBUG=diamondvault:* cre workflow simulate Diamond-Vault-workflow --target staging-settings
 ```
 
 ---
@@ -195,11 +194,11 @@ DEBUG=diamondvault:* cre workflow simulate Diamond-Vault-workflow --target harve
 cd Diamond-Vault-workflow
 bun run build
 
-# 2. Deploy via CRE CLI
+# 2. Deploy via CRE CLI using the configured target
 cd ..
 cre workflow deploy Diamond-Vault-workflow \
-  --network sepolia \
-  --rpc-url $SEPOLIA_RPC_URL
+  --target staging-settings \
+  --yes
 ```
 
 Output:
@@ -253,11 +252,10 @@ Before deploying to mainnet:
 5. **Enable gradual rollout** — Start with small allocations
 
 ```bash
-# Deploy to mainnet
+# Deploy to mainnet using the production target
 cre workflow deploy Diamond-Vault-workflow \
-  --network mainnet \
-  --rpc-url $MAINNET_RPC_URL \
-  --dry-run  # First run as dry-run to verify
+  --target production-settings \
+  --yes
 ```
 
 ---
